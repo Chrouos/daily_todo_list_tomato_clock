@@ -1,0 +1,20 @@
+{
+  "name": "pomodoro-timer",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A simple Pomodoro timer desktop app built with Electron for macOS.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [
+    "pomodoro",
+    "electron",
+    "timer"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^38.1.2"
+  }
+}
