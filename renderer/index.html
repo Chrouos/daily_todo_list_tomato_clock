@@ -23,6 +23,12 @@
         <button class="app-tabs__tab" data-tab="logs" role="tab" aria-selected="false">
           Logs
         </button>
+        <button class="app-tabs__tab" data-tab="timeline" role="tab" aria-selected="false">
+          Timeline
+        </button>
+        <button class="app-tabs__tab" data-tab="todo" role="tab" aria-selected="false">
+          Todo
+        </button>
       </nav>
 
       <section class="app-panels">
@@ -40,6 +46,17 @@
               <span class="category-selector__label">分類</span>
               <select id="categorySelect" class="category-selector__select"></select>
             </label>
+          </section>
+
+          <section class="current-todo" id="currentTodo">
+            <div class="current-todo__info">
+              <span class="current-todo__label">目前待辦</span>
+              <p class="current-todo__title" id="currentTodoTitle">未選擇</p>
+              <p class="current-todo__tags" id="currentTodoTags"></p>
+            </div>
+            <div class="current-todo__actions">
+              <button type="button" id="clearActiveTodoBtn" class="btn btn--ghost" hidden>取消選擇</button>
+            </div>
           </section>
 
           <section class="controls">
@@ -107,6 +124,46 @@
               <button type="button" id="clearHistoryBtn" class="btn btn--ghost">清除紀錄</button>
             </div>
             <ul class="history__list" id="historyList"></ul>
+          </div>
+        </section>
+
+        <section class="app-panel" data-panel="timeline" role="tabpanel" hidden>
+          <div class="panel-card">
+            <div class="panel-card__header">
+              <h2>每日時間線</h2>
+            </div>
+            <div class="timeline" id="timeline"></div>
+          </div>
+        </section>
+
+        <section class="app-panel" data-panel="todo" role="tabpanel" hidden>
+          <div class="panel-card">
+            <div class="panel-card__header">
+              <h2>Todo List</h2>
+              <button type="button" id="clearTodosBtn" class="btn btn--ghost">清除完成項目</button>
+            </div>
+            <form id="todoForm" class="todo-form" autocomplete="off">
+              <input
+                type="text"
+                id="todoInput"
+                placeholder="新增待辦事項"
+                maxlength="80"
+              />
+              <div class="todo-tags">
+                <label for="todoTagsInput">標籤（逗號分隔，可點選建議新增）</label>
+                <input
+                  type="text"
+                  id="todoTagsInput"
+                  placeholder="例如：寫作, 研究"
+                  maxlength="120"
+                />
+                <div class="todo-tags__suggestions" id="todoTagSuggestions"></div>
+              </div>
+              <div class="todo-form__actions">
+                <button type="submit" class="btn btn--primary">新增</button>
+              </div>
+            </form>
+            <ul class="todo-list" id="todoList"></ul>
           </div>
         </section>
       </section>

@@ -23,6 +23,16 @@ const elements = {
   clearHistoryBtn: document.getElementById('clearHistoryBtn'),
   homeTabs: Array.from(document.querySelectorAll('.app-tabs__tab')),
   homePanels: Array.from(document.querySelectorAll('.app-panel')),
+  timeline: document.getElementById('timeline'),
+  currentTodoTitle: document.getElementById('currentTodoTitle'),
+  currentTodoTags: document.getElementById('currentTodoTags'),
+  todoForm: document.getElementById('todoForm'),
+  todoInput: document.getElementById('todoInput'),
+  todoTagsInput: document.getElementById('todoTagsInput'),
+  todoTagSuggestions: document.getElementById('todoTagSuggestions'),
+  todoList: document.getElementById('todoList'),
+  clearTodosBtn: document.getElementById('clearTodosBtn'),
+  clearActiveTodoBtn: document.getElementById('clearActiveTodoBtn'),
   startBtn: document.getElementById('startBtn'),
   pauseBtn: document.getElementById('pauseBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -59,8 +69,55 @@ const state = {
   currentCategory: defaultCategories[0],
   history: [],
   activeSession: null,
+  todos: [],
+  activeTodoId: null,
   activeTab: 'home'
 };
+
+function normalizeTags(tags) {
+  const seen = new Set();
+  const result = [];
+
+  if (!Array.isArray(tags)) {
+    return result;
+  }
+
+  tags.forEach(tag => {
+    const trimmed = String(tag || '').trim();
+    if (trimmed && !seen.has(trimmed)) {
+      seen.add(trimmed);
+      result.push(trimmed);
+    }
+  });
+
+  return result;
+}
+
+function parseTagsInput(raw) {
+  if (!raw) {
+    return [];
+  }
+
+  const parts = raw
+    .split(',')
+    .map(part => part.trim())
+    .filter(Boolean);
+
+  return normalizeTags(parts);
+}
+
+function getInputTags() {
+  return parseTagsInput(elements.todoTagsInput?.value || '');
+}
+
+function setInputTags(tags) {
+  if (!elements.todoTagsInput) {
+    return;
+  }
+
+  elements.todoTagsInput.value = normalizeTags(tags).join(', ');
+  renderTagSuggestions();
+}
 
 function normalizeCategories(categories) {
   const input = Array.isArray(categories) ? categories.map(category => String(category).trim()) : [];
@@ -85,7 +142,9 @@ function persistState() {
     currentCategory: state.currentCategory,
     history: state.history,
     activeSession: state.activeSession,
-    activeTab: state.activeTab
+    todos: state.todos,
+    activeTab: state.activeTab,
+    activeTodoId: state.activeTodoId
   };
 
   try {
@@ -134,18 +193,41 @@ function loadPersistedState() {
           endedAt,
           category: entry.category,
           durationSeconds,
-          result: entry.result
+          result: entry.result,
+          plannedMinutes: entry.plannedMinutes,
+          tags: normalizeTags(entry.tags || []),
+          todoId: entry.todoId
         };
       });
       state.activeSession = stored.activeSession && stored.activeSession.startedAt ? stored.activeSession : null;
+      if (state.activeSession) {
+        state.activeSession.tags = normalizeTags(state.activeSession.tags || [state.activeSession.category]);
+      }
       if (typeof stored.activeTab === 'string') {
         if (stored.activeTab === 'logs' || stored.activeTab === 'history') {
           state.activeTab = 'logs';
         } else if (stored.activeTab === 'settings') {
           state.activeTab = 'settings';
+        } else if (stored.activeTab === 'timeline') {
+          state.activeTab = 'timeline';
+        } else if (stored.activeTab === 'todo') {
+          state.activeTab = 'todo';
         } else {
           state.activeTab = 'home';
         }
+      }
+      state.todos = Array.isArray(stored.todos)
+        ? stored.todos.map(todo => ({
+            id: todo.id || crypto.randomUUID?.() || String(Date.now()),
+            title: String(todo.title || '').trim(),
+            completed: Boolean(todo.completed),
+            createdAt: todo.createdAt || new Date().toISOString(),
+            completedAt: todo.completedAt || null,
+            tags: normalizeTags(todo.tags || [])
+          }))
+        : [];
+      if (stored.activeTodoId && state.todos.some(todo => todo.id === stored.activeTodoId)) {
+        state.activeTodoId = stored.activeTodoId;
       }
     }
   } catch (error) {
@@ -186,8 +268,21 @@ function recordSessionStart() {
   state.activeSession = {
     startedAt: new Date().toISOString(),
     category: state.currentCategory,
-    plannedMinutes: state.settings.focusMinutes
+    plannedMinutes: state.settings.focusMinutes,
+    tags: normalizeTags([state.currentCategory])
   };
+
+  if (state.activeTodoId) {
+    const activeTodo = state.todos.find(todo => todo.id === state.activeTodoId);
+    if (activeTodo) {
+      state.activeSession.todoId = activeTodo.id;
+      const combinedTags = normalizeTags([
+        state.currentCategory,
+        ...(activeTodo.tags || [])
+      ]);
+      state.activeSession.tags = combinedTags;
+    }
+  }
 
   renderHistoryList();
   persistState();
@@ -211,14 +306,29 @@ function finalizeActiveSession(result = 'completed') {
     result
   };
 
+  completedSession.tags = normalizeTags(completedSession.tags || [completedSession.category]);
+
   state.history.unshift(completedSession);
   if (state.history.length > 200) {
     state.history.length = 200;
   }
 
+  if (completedSession.todoId && result === 'completed') {
+    const todo = state.todos.find(item => item.id === completedSession.todoId);
+    if (todo && !todo.completed) {
+      todo.completed = true;
+      todo.completedAt = completedSession.endedAt;
+    }
+  }
+
   state.activeSession = null;
-  renderHistoryList();
-  persistState();
+  if (completedSession.todoId && completedSession.result === 'completed' && state.activeTodoId === completedSession.todoId) {
+    setActiveTodo(null);
+  } else {
+    renderTodos();
+    renderHistoryList();
+    persistState();
+  }
 }
 
 function renderHistoryList() {
@@ -259,6 +369,13 @@ function renderHistoryList() {
     duration.className = 'history__duration';
     duration.textContent = `已進行：${formatDuration(durationSeconds)}`;
 
+    if (state.activeSession.tags?.length) {
+      const tagsRow = document.createElement('div');
+      tagsRow.className = 'history__tags';
+      tagsRow.textContent = `標籤：${normalizeTags(state.activeSession.tags).join(', ')}`;
+      timestamps.appendChild(tagsRow);
+    }
+
     activeItem.append(meta, timestamps, duration);
     items.push(activeItem);
   }
@@ -271,7 +388,15 @@ function renderHistoryList() {
     meta.className = 'history__meta';
 
     const resultLabel = document.createElement('span');
-    resultLabel.textContent = session.result === 'completed' ? '已完成' : session.result === 'reset' ? '已重設' : '已結束';
+    const resultText =
+      session.result === 'completed'
+        ? '已完成'
+        : session.result === 'reset'
+          ? '已重設'
+          : session.result === 'updated'
+            ? '已更新'
+            : '已結束';
+    resultLabel.textContent = resultText;
     resultLabel.style.fontWeight = '600';
 
     const categoryChip = document.createElement('span');
@@ -291,6 +416,13 @@ function renderHistoryList() {
     duration.className = 'history__duration';
     duration.textContent = `耗時：${formatDuration(session.durationSeconds ?? 0)}`;
 
+    if (session.tags?.length) {
+      const tagsRow = document.createElement('div');
+      tagsRow.className = 'history__tags';
+      tagsRow.textContent = `標籤：${normalizeTags(session.tags).join(', ')}`;
+      timestamps.appendChild(tagsRow);
+    }
+
     item.append(meta, timestamps, duration);
     items.push(item);
   });
@@ -303,12 +435,466 @@ function renderHistoryList() {
   }
 
   historyList.append(...items);
+  renderTimeline();
 }
 
 function clearHistory() {
   state.history = [];
   persistState();
   renderHistoryList();
+}
+
+function renderTimeline() {
+  if (!elements.timeline) {
+    return;
+  }
+
+  const container = elements.timeline;
+  container.innerHTML = '';
+
+  const entries = [];
+
+  if (state.activeSession) {
+    entries.push({
+      ...state.activeSession,
+      isActive: true
+    });
+  }
+
+  state.history.forEach(session => {
+    entries.push({
+      ...session,
+      isActive: false
+    });
+  });
+
+  if (!entries.length) {
+    const empty = document.createElement('p');
+    empty.className = 'timeline__empty';
+    empty.textContent = '目前沒有紀錄';
+    container.appendChild(empty);
+    return;
+  }
+
+  const groups = new Map();
+
+  entries.forEach(entry => {
+    const base = entry.startedAt || entry.endedAt || new Date().toISOString();
+    const date = new Date(base);
+    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
+      date.getDate()
+    ).padStart(2, '0')}`;
+
+    if (!groups.has(key)) {
+      groups.set(key, []);
+    }
+    groups.get(key).push(entry);
+  });
+
+  const sortedKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
+
+  sortedKeys.forEach(key => {
+    const dayEntries = groups.get(key);
+    dayEntries.sort((a, b) => {
+      const aTime = new Date(a.startedAt || a.endedAt || 0).getTime();
+      const bTime = new Date(b.startedAt || b.endedAt || 0).getTime();
+      return bTime - aTime;
+    });
+
+    const daySection = document.createElement('div');
+    daySection.className = 'timeline__day';
+
+    const dateHeading = document.createElement('div');
+    dateHeading.className = 'timeline__date';
+    dateHeading.textContent = formatDayLabel(key);
+    daySection.appendChild(dateHeading);
+
+    const entriesList = document.createElement('div');
+    entriesList.className = 'timeline__entries';
+
+    dayEntries.forEach(entry => {
+      const item = document.createElement('div');
+      item.className = 'timeline__item';
+
+      const range = document.createElement('div');
+      range.className = 'timeline__heading';
+      const startLabel = formatTimeOfDay(entry.startedAt);
+      const endLabel = entry.isActive
+        ? '進行中'
+        : entry.endedAt
+          ? formatTimeOfDay(entry.endedAt)
+          : '—';
+      const rangeText = document.createElement('span');
+      rangeText.className = 'timeline__range';
+      rangeText.textContent = `${startLabel} - ${endLabel}`;
+
+      const categoryChip = document.createElement('span');
+      categoryChip.className = 'timeline__category';
+      categoryChip.textContent = entry.category || defaultCategories[0];
+
+      range.append(rangeText, categoryChip);
+
+      const details = document.createElement('div');
+      details.className = 'timeline__details';
+
+      if (entry.plannedMinutes) {
+        const planned = document.createElement('span');
+        planned.textContent = `預計：${entry.plannedMinutes} 分`; 
+        details.appendChild(planned);
+      }
+
+      if (entry.isActive) {
+        const now = new Date();
+        const start = new Date(entry.startedAt);
+        const durationSeconds = Number.isNaN(start.getTime())
+          ? 0
+          : Math.max(0, Math.floor((now.getTime() - start.getTime()) / 1000));
+        const durationEl = document.createElement('span');
+        durationEl.textContent = `已進行：${formatDuration(durationSeconds)}`;
+        details.appendChild(durationEl);
+
+        const statusEl = document.createElement('span');
+        statusEl.textContent = '狀態：進行中';
+        details.appendChild(statusEl);
+      } else {
+        const durationEl = document.createElement('span');
+        durationEl.textContent = `耗時：${formatDuration(entry.durationSeconds ?? 0)}`;
+        details.appendChild(durationEl);
+
+        const status = document.createElement('span');
+        const label =
+          entry.result === 'completed'
+            ? '已完成'
+            : entry.result === 'reset'
+              ? '已重設'
+              : entry.result === 'updated'
+                ? '已更新'
+                : '已結束';
+        status.textContent = `狀態：${label}`;
+        details.appendChild(status);
+      }
+
+      if (entry.tags?.length) {
+        const tagsRow = document.createElement('span');
+        tagsRow.className = 'timeline__tags';
+        tagsRow.textContent = `標籤：${normalizeTags(entry.tags).join(', ')}`;
+        details.appendChild(tagsRow);
+      }
+
+      item.append(range, details);
+      entriesList.append(item);
+    });
+
+    daySection.appendChild(entriesList);
+    container.appendChild(daySection);
+  });
+}
+
+function createTodoItem(todo) {
+  const item = document.createElement('li');
+  item.className = 'todo-item';
+  item.dataset.id = todo.id;
+  if (todo.completed) {
+    item.classList.add('todo-item--completed');
+  }
+
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = Boolean(todo.completed);
+  checkbox.dataset.action = 'toggle';
+  item.appendChild(checkbox);
+
+  const content = document.createElement('div');
+  content.className = 'todo-item__content';
+
+  const title = document.createElement('p');
+  title.className = 'todo-item__title';
+  title.textContent = todo.title || '(未命名)';
+  content.appendChild(title);
+
+  const meta = document.createElement('span');
+  meta.className = 'todo-item__meta';
+  meta.textContent = `新增：${formatDateTime(todo.createdAt)}`;
+  content.appendChild(meta);
+
+  if (todo.completed && todo.completedAt) {
+    const completedMeta = document.createElement('span');
+    completedMeta.className = 'todo-item__meta';
+    completedMeta.textContent = `完成：${formatDateTime(todo.completedAt)}`;
+    content.appendChild(completedMeta);
+  }
+
+  if (todo.tags?.length) {
+    const tagsContainer = document.createElement('div');
+    tagsContainer.className = 'todo-item__tags';
+    normalizeTags(todo.tags).forEach(tag => {
+      const chip = document.createElement('span');
+      chip.className = 'todo-item__tag';
+      chip.textContent = tag;
+      tagsContainer.appendChild(chip);
+    });
+    content.appendChild(tagsContainer);
+  }
+
+  item.appendChild(content);
+
+  const actions = document.createElement('div');
+  actions.className = 'todo-item__actions';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.dataset.action = 'remove';
+  removeBtn.textContent = '刪除';
+  actions.appendChild(removeBtn);
+
+  if (!todo.completed) {
+    const activateBtn = document.createElement('button');
+    activateBtn.type = 'button';
+    activateBtn.dataset.action = 'activate';
+    activateBtn.textContent = state.activeTodoId === todo.id ? '已選擇' : '設為目前';
+    if (state.activeTodoId === todo.id) {
+      activateBtn.disabled = true;
+    }
+    actions.appendChild(activateBtn);
+  }
+
+  item.appendChild(actions);
+  return item;
+}
+
+function renderTodos() {
+  if (!elements.todoList) {
+    return;
+  }
+
+  const list = elements.todoList;
+  list.innerHTML = '';
+
+  const activeTodos = state.todos.filter(todo => !todo.completed);
+  const completedTodos = state.todos.filter(todo => todo.completed);
+
+  if (!activeTodos.length && !completedTodos.length) {
+    const empty = document.createElement('li');
+    empty.className = 'todo-empty';
+    empty.textContent = '目前沒有待辦事項';
+    list.appendChild(empty);
+    renderTagSuggestions();
+    return;
+  }
+
+  const fragment = document.createDocumentFragment();
+
+  const appendSection = (title, todos) => {
+    if (!todos.length) {
+      return;
+    }
+
+    const section = document.createElement('div');
+    section.className = 'todo-section';
+
+    const heading = document.createElement('h3');
+    heading.className = 'todo-section__heading';
+    heading.textContent = title;
+    section.appendChild(heading);
+
+    const items = document.createElement('div');
+    items.className = 'todo-section__items';
+
+    todos.forEach(todo => {
+      items.appendChild(createTodoItem(todo));
+    });
+
+    section.appendChild(items);
+    fragment.appendChild(section);
+  };
+
+  appendSection('待辦事項', activeTodos);
+  appendSection('已完成', completedTodos);
+
+  list.appendChild(fragment);
+  renderTagSuggestions();
+  updateActiveTodoUI();
+}
+
+function renderTagSuggestions() {
+  if (!elements.todoTagSuggestions) {
+    return;
+  }
+
+  const container = elements.todoTagSuggestions;
+  container.innerHTML = '';
+
+  const suggestions = new Set();
+  state.categories.forEach(category => suggestions.add(category));
+  state.todos.forEach(todo => normalizeTags(todo.tags || []).forEach(tag => suggestions.add(tag)));
+  if (state.currentCategory) {
+    suggestions.add(state.currentCategory);
+  }
+
+  const tags = Array.from(suggestions).filter(Boolean).sort((a, b) => a.localeCompare(b, 'zh-Hant'));
+  const inputTags = new Set(getInputTags());
+
+  if (!tags.length) {
+    return;
+  }
+
+  tags.forEach(tag => {
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'todo-tag-chip';
+    if (inputTags.has(tag)) {
+      chip.classList.add('todo-tag-chip--active');
+    }
+    chip.dataset.tag = tag;
+    chip.textContent = tag;
+    container.appendChild(chip);
+  });
+}
+
+function handleTagSuggestionClick(event) {
+  const target = event.target.closest('.todo-tag-chip');
+  if (!target) {
+    return;
+  }
+
+  const { tag } = target.dataset;
+  if (!tag) {
+    return;
+  }
+
+  const current = new Set(getInputTags());
+  if (current.has(tag)) {
+    current.delete(tag);
+  } else {
+    current.add(tag);
+  }
+
+  setInputTags(Array.from(current));
+}
+
+function addTodo(title) {
+  const trimmed = title.trim();
+  if (!trimmed) {
+    return;
+  }
+
+  const tags = normalizeTags(getInputTags());
+  if (!tags.length && state.currentCategory) {
+    tags.push(state.currentCategory);
+  }
+
+  const todo = {
+    id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    title: trimmed,
+    completed: false,
+    createdAt: new Date().toISOString(),
+    completedAt: null,
+    tags
+  };
+
+  state.todos.unshift(todo);
+  persistState();
+  renderTodos();
+  if (elements.todoInput) {
+    elements.todoInput.value = '';
+  }
+  setInputTags([]);
+}
+
+function toggleTodo(id) {
+  const todo = state.todos.find(item => item.id === id);
+  if (!todo) {
+    return;
+  }
+
+  todo.completed = !todo.completed;
+  todo.completedAt = todo.completed ? new Date().toISOString() : null;
+  persistState();
+  renderTodos();
+  if (state.activeTodoId === id && todo.completed) {
+    setActiveTodo(null);
+  }
+}
+
+function removeTodo(id) {
+  const index = state.todos.findIndex(item => item.id === id);
+  if (index === -1) {
+    return;
+  }
+
+  state.todos.splice(index, 1);
+  persistState();
+  renderTodos();
+  if (state.activeTodoId === id) {
+    setActiveTodo(null);
+  }
+}
+
+function clearCompletedTodos() {
+  state.todos = state.todos.filter(todo => !todo.completed);
+  persistState();
+  renderTodos();
+  if (state.activeTodoId && !state.todos.some(todo => todo.id === state.activeTodoId)) {
+    setActiveTodo(null);
+  }
+}
+
+function setActiveTodo(id) {
+  if (id && !state.todos.some(todo => todo.id === id)) {
+    id = null;
+  }
+
+  state.activeTodoId = id;
+
+  const activeTodo = id ? state.todos.find(todo => todo.id === id) : null;
+
+  if (activeTodo) {
+    if (activeTodo.tags?.length) {
+      const matchingCategory = normalizeTags(activeTodo.tags).find(tag => state.categories.includes(tag));
+      if (matchingCategory) {
+        state.currentCategory = matchingCategory;
+        renderCategoryList();
+        updatePhaseVisuals();
+      }
+    }
+    setInputTags(activeTodo.tags || []);
+  } else {
+    setInputTags([]);
+  }
+
+  renderTodos();
+  renderHistoryList();
+  persistState();
+}
+
+function updateActiveTodoUI() {
+  if (!elements.currentTodoTitle) {
+    return;
+  }
+
+  const activeTodo = state.activeTodoId ? state.todos.find(todo => todo.id === state.activeTodoId) : null;
+
+  elements.currentTodoTitle.textContent = activeTodo ? activeTodo.title : '未選擇';
+
+  if (elements.currentTodoTags) {
+    elements.currentTodoTags.textContent = activeTodo && activeTodo.tags?.length
+      ? `標籤：${normalizeTags(activeTodo.tags).join(', ')}`
+      : '';
+  }
+
+  if (elements.clearActiveTodoBtn) {
+    elements.clearActiveTodoBtn.hidden = !activeTodo;
+  }
+
+  if (elements.categorySelect && activeTodo) {
+    renderCategoryList();
+  }
+
+  if (elements.todoList) {
+    elements.todoList.querySelectorAll('.todo-item').forEach(item => {
+      item.classList.toggle('todo-item--active', item.dataset.id === state.activeTodoId);
+    });
+  }
 }
 
 function formatTime(totalSeconds) {
@@ -361,6 +947,35 @@ function formatDuration(seconds) {
   const remainingSeconds = total % 60;
 
   return `${minutes} 分 ${remainingSeconds.toString().padStart(2, '0')} 秒`;
+}
+
+function formatTimeOfDay(isoString) {
+  if (!isoString) {
+    return '—';
+  }
+
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return '—';
+  }
+
+  return new Intl.DateTimeFormat('zh-TW', {
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(date);
+}
+
+function formatDayLabel(isoDate) {
+  const date = new Date(`${isoDate}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return isoDate;
+  }
+
+  return new Intl.DateTimeFormat('zh-TW', {
+    month: '2-digit',
+    day: '2-digit',
+    weekday: 'short'
+  }).format(date);
 }
 
 function updatePhaseVisuals() {
@@ -555,6 +1170,7 @@ function renderCategoryList() {
 function updateCategoryUI() {
   updateCategorySelect();
   renderCategoryList();
+  renderTagSuggestions();
 }
 
 function addCategory(value) {
@@ -588,6 +1204,9 @@ function removeCategory(name) {
     state.currentCategory = state.categories[0] || '';
     if (state.activeSession) {
       state.activeSession.category = state.currentCategory;
+      const currentTags = normalizeTags(state.activeSession.tags || []);
+      currentTags.unshift(state.currentCategory);
+      state.activeSession.tags = normalizeTags(currentTags);
     }
   }
 
@@ -611,9 +1230,47 @@ function handleCategoryChange(event) {
   renderCategoryList();
   if (state.activeSession) {
     state.activeSession.category = value;
+    const currentTags = normalizeTags(state.activeSession.tags || []);
+    currentTags.unshift(value);
+    state.activeSession.tags = normalizeTags(currentTags);
     renderHistoryList();
   }
   persistState();
+}
+
+function handleTodoSubmit(event) {
+  event.preventDefault();
+  if (!elements.todoInput) {
+    return;
+  }
+  addTodo(elements.todoInput.value || '');
+}
+
+function handleTodoListClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  const item = target.closest('.todo-item');
+  if (!item) {
+    return;
+  }
+
+  const { id } = item.dataset;
+  if (!id) {
+    return;
+  }
+
+  const action = target.dataset.action;
+
+  if (action === 'toggle') {
+    return;
+  } else if (action === 'remove') {
+    removeTodo(id);
+  } else if (action === 'activate') {
+    setActiveTodo(id);
+  }
 }
 
 function handleCategoryListClick(event) {
@@ -643,7 +1300,7 @@ function handleTabClick(event) {
 
 function setActiveTab(tab) {
   let targetTab = 'home';
-  if (tab === 'settings' || tab === 'logs') {
+  if (tab === 'settings' || tab === 'logs' || tab === 'timeline' || tab === 'todo') {
     targetTab = tab;
   }
   state.activeTab = targetTab;
@@ -659,6 +1316,10 @@ function setActiveTab(tab) {
     panel.classList.toggle('app-panel--active', isActive);
     panel.hidden = !isActive;
   });
+
+  if (targetTab === 'todo') {
+    renderTagSuggestions();
+  }
 }
 
 function applySettings(event) {
@@ -739,6 +1400,35 @@ function bindEvents() {
   if (elements.clearHistoryBtn) {
     elements.clearHistoryBtn.addEventListener('click', clearHistory);
   }
+  if (elements.todoForm) {
+    elements.todoForm.addEventListener('submit', handleTodoSubmit);
+  }
+  if (elements.todoList) {
+    elements.todoList.addEventListener('click', handleTodoListClick);
+    elements.todoList.addEventListener('change', event => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || target.type !== 'checkbox') {
+        return;
+      }
+      const item = target.closest('.todo-item');
+      if (!item?.dataset?.id) {
+        return;
+      }
+      toggleTodo(item.dataset.id);
+    });
+  }
+  if (elements.clearTodosBtn) {
+    elements.clearTodosBtn.addEventListener('click', clearCompletedTodos);
+  }
+  if (elements.todoTagSuggestions) {
+    elements.todoTagSuggestions.addEventListener('click', handleTagSuggestionClick);
+  }
+  if (elements.todoTagsInput) {
+    elements.todoTagsInput.addEventListener('input', renderTagSuggestions);
+  }
+  if (elements.clearActiveTodoBtn) {
+    elements.clearActiveTodoBtn.addEventListener('click', () => setActiveTodo(null));
+  }
   elements.homeTabs.forEach(tab => tab.addEventListener('click', handleTabClick));
 }
 
@@ -750,6 +1440,8 @@ function init() {
   updateControls();
   updateCategoryUI();
   renderHistoryList();
+  renderTodos();
+  updateActiveTodoUI();
   setActiveTab(state.activeTab);
   persistState();
 }
