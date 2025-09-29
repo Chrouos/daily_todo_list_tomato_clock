@@ -169,6 +169,38 @@
       </section>
     </main>
 
+    <div class="task-dialog-overlay" id="todoDiscussionOverlay" hidden>
+      <div class="task-dialog-overlay__backdrop" data-dialog-close></div>
+      <div class="task-dialog" role="dialog" aria-modal="true" aria-labelledby="todoDiscussionTitle">
+        <header class="task-dialog__header">
+          <div class="task-dialog__heading">
+            <span class="task-dialog__label">Task</span>
+            <h3 class="task-dialog__title" id="todoDiscussionTitle">—</h3>
+          </div>
+          <button type="button" class="task-dialog__close" id="todoDiscussionClose" aria-label="關閉">
+            &times;
+          </button>
+        </header>
+        <div class="task-dialog__body">
+          <ul class="task-discussion" id="todoDiscussionList"></ul>
+          <p class="task-discussion__empty" id="todoDiscussionEmpty" hidden>目前沒有紀錄，開始新增問題。</p>
+        </div>
+        <form class="task-dialog__form" id="todoDiscussionForm" autocomplete="off">
+          <label for="todoDiscussionInput" class="task-dialog__form-label">新增遇到的問題</label>
+          <textarea
+            id="todoDiscussionInput"
+            rows="3"
+            maxlength="400"
+            placeholder="簡單描述遇到的問題或想法..."
+            required
+          ></textarea>
+          <div class="task-dialog__form-actions">
+            <button type="submit" class="btn btn--primary">新增紀錄</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
     <script type="module" src="./app.js"></script>
   </body>
 </html>

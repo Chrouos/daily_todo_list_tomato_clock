@@ -33,6 +33,13 @@ const elements = {
   todoList: document.getElementById('todoList'),
   clearTodosBtn: document.getElementById('clearTodosBtn'),
   clearActiveTodoBtn: document.getElementById('clearActiveTodoBtn'),
+  todoDiscussionOverlay: document.getElementById('todoDiscussionOverlay'),
+  todoDiscussionTitle: document.getElementById('todoDiscussionTitle'),
+  todoDiscussionList: document.getElementById('todoDiscussionList'),
+  todoDiscussionEmpty: document.getElementById('todoDiscussionEmpty'),
+  todoDiscussionForm: document.getElementById('todoDiscussionForm'),
+  todoDiscussionInput: document.getElementById('todoDiscussionInput'),
+  todoDiscussionClose: document.getElementById('todoDiscussionClose'),
   startBtn: document.getElementById('startBtn'),
   pauseBtn: document.getElementById('pauseBtn'),
   resetBtn: document.getElementById('resetBtn'),
@@ -57,6 +64,13 @@ const defaults = {
 const defaultCategories = ['未分類'];
 const STORAGE_KEY = 'pomodoro-timer-state-v1';
 
+const TIMELINE_PX_PER_MINUTE = 1.6;
+const TIMELINE_MIN_DAY_HEIGHT = 160;
+const TIMELINE_MIN_SESSION_HEIGHT = 28;
+const TIMELINE_MIN_SPAN_MS = 60 * 1000;
+const TIMELINE_SESSION_GAP = 12;
+const TIMELINE_TODO_GAP = 12;
+
 const state = {
   settings: { ...defaults },
   currentPhase: Phase.FOCUS,
@@ -71,7 +85,8 @@ const state = {
   activeSession: null,
   todos: [],
   activeTodoId: null,
-  activeTab: 'home'
+  activeTab: 'home',
+  activeDiscussionTodoId: null
 };
 
 function normalizeTags(tags) {
@@ -135,6 +150,91 @@ function normalizeCategories(categories) {
   return result.length ? result : [...defaultCategories];
 }
 
+function normalizeDiscussion(entries) {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+
+  const seen = new Set();
+
+  return entries
+    .map(entry => {
+      const id = entry?.id || crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const text = String(entry?.text || '').trim();
+      const createdAt = entry?.createdAt || new Date().toISOString();
+
+      if (!text) {
+        return null;
+      }
+
+      return {
+        id,
+        text,
+        createdAt
+      };
+    })
+    .filter(Boolean)
+    .filter(entry => {
+      if (seen.has(entry.id)) {
+        return false;
+      }
+      seen.add(entry.id);
+      return true;
+    })
+    .sort((a, b) => {
+      const aTime = new Date(a.createdAt || 0).getTime();
+      const bTime = new Date(b.createdAt || 0).getTime();
+      return aTime - bTime;
+    });
+}
+
+function getDisplayTodoTitle(entry) {
+  if (!entry) {
+    return '';
+  }
+
+  const storedTitle = typeof entry.todoTitle === 'string' ? entry.todoTitle.trim() : '';
+  if (storedTitle) {
+    return storedTitle;
+  }
+
+  if (entry.todoId) {
+    const todo = state.todos.find(item => item.id === entry.todoId);
+    if (todo) {
+      const title = String(todo.title || '').trim();
+      return title || '(未命名)';
+    }
+  }
+
+  return '';
+}
+
+function getDateKey(isoString) {
+  if (!isoString) {
+    return null;
+  }
+
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function getTimeValue(isoString) {
+  if (!isoString) {
+    return null;
+  }
+
+  const date = new Date(isoString);
+  const time = date.getTime();
+  return Number.isNaN(time) ? null : time;
+}
+
 function persistState() {
   const payload = {
     settings: state.settings,
@@ -144,7 +244,8 @@ function persistState() {
     activeSession: state.activeSession,
     todos: state.todos,
     activeTab: state.activeTab,
-    activeTodoId: state.activeTodoId
+    activeTodoId: state.activeTodoId,
+    activeDiscussionTodoId: state.activeDiscussionTodoId
   };
 
   try {
@@ -174,6 +275,30 @@ function loadPersistedState() {
       state.currentCategory = state.categories.includes(stored.currentCategory)
         ? stored.currentCategory
         : state.categories[0];
+      const parsedTodos = Array.isArray(stored.todos)
+        ? stored.todos.map(todo => ({
+            id: todo.id || crypto.randomUUID?.() || String(Date.now()),
+            title: String(todo.title || '').trim(),
+            completed: Boolean(todo.completed),
+            createdAt: todo.createdAt || new Date().toISOString(),
+            completedAt: todo.completedAt || null,
+            tags: normalizeTags(todo.tags || []),
+            discussion: normalizeDiscussion(todo.discussion || [])
+          }))
+        : [];
+
+      const resolveStoredTodoTitle = todoId => {
+        if (!todoId) {
+          return '';
+        }
+        const matched = parsedTodos.find(todo => todo.id === todoId);
+        if (!matched) {
+          return '';
+        }
+        const title = String(matched.title || '').trim();
+        return title || '(未命名)';
+      };
+
       state.history = Array.isArray(stored.history) ? stored.history.slice(0, 200) : [];
       state.history = state.history.map(entry => {
         const startedAt = entry.startedAt;
@@ -196,12 +321,18 @@ function loadPersistedState() {
           result: entry.result,
           plannedMinutes: entry.plannedMinutes,
           tags: normalizeTags(entry.tags || []),
-          todoId: entry.todoId
+          todoId: entry.todoId,
+          todoTitle:
+            (typeof entry.todoTitle === 'string' ? entry.todoTitle.trim() : '') || resolveStoredTodoTitle(entry.todoId)
         };
       });
-      state.activeSession = stored.activeSession && stored.activeSession.startedAt ? stored.activeSession : null;
+      state.activeSession = stored.activeSession && stored.activeSession.startedAt ? { ...stored.activeSession } : null;
       if (state.activeSession) {
         state.activeSession.tags = normalizeTags(state.activeSession.tags || [state.activeSession.category]);
+        const storedTodoTitle =
+          (typeof state.activeSession.todoTitle === 'string' ? state.activeSession.todoTitle.trim() : '') ||
+          resolveStoredTodoTitle(state.activeSession.todoId);
+        state.activeSession.todoTitle = storedTodoTitle || null;
       }
       if (typeof stored.activeTab === 'string') {
         if (stored.activeTab === 'logs' || stored.activeTab === 'history') {
@@ -216,18 +347,12 @@ function loadPersistedState() {
           state.activeTab = 'home';
         }
       }
-      state.todos = Array.isArray(stored.todos)
-        ? stored.todos.map(todo => ({
-            id: todo.id || crypto.randomUUID?.() || String(Date.now()),
-            title: String(todo.title || '').trim(),
-            completed: Boolean(todo.completed),
-            createdAt: todo.createdAt || new Date().toISOString(),
-            completedAt: todo.completedAt || null,
-            tags: normalizeTags(todo.tags || [])
-          }))
-        : [];
-      if (stored.activeTodoId && state.todos.some(todo => todo.id === stored.activeTodoId)) {
+      state.todos = parsedTodos;
+      if (stored.activeTodoId && parsedTodos.some(todo => todo.id === stored.activeTodoId)) {
         state.activeTodoId = stored.activeTodoId;
+      }
+      if (stored.activeDiscussionTodoId && parsedTodos.some(todo => todo.id === stored.activeDiscussionTodoId)) {
+        state.activeDiscussionTodoId = stored.activeDiscussionTodoId;
       }
     }
   } catch (error) {
@@ -269,7 +394,8 @@ function recordSessionStart() {
     startedAt: new Date().toISOString(),
     category: state.currentCategory,
     plannedMinutes: state.settings.focusMinutes,
-    tags: normalizeTags([state.currentCategory])
+    tags: normalizeTags([state.currentCategory]),
+    todoTitle: null
   };
 
   if (state.activeTodoId) {
@@ -281,6 +407,8 @@ function recordSessionStart() {
         ...(activeTodo.tags || [])
       ]);
       state.activeSession.tags = combinedTags;
+      const title = String(activeTodo.title || '').trim();
+      state.activeSession.todoTitle = title || '(未命名)';
     }
   }
 
@@ -307,6 +435,7 @@ function finalizeActiveSession(result = 'completed') {
   };
 
   completedSession.tags = normalizeTags(completedSession.tags || [completedSession.category]);
+  completedSession.todoTitle = getDisplayTodoTitle(completedSession) || null;
 
   state.history.unshift(completedSession);
   if (state.history.length > 200) {
@@ -369,6 +498,8 @@ function renderHistoryList() {
     duration.className = 'history__duration';
     duration.textContent = `已進行：${formatDuration(durationSeconds)}`;
 
+    const todoTitle = getDisplayTodoTitle(state.activeSession);
+
     if (state.activeSession.tags?.length) {
       const tagsRow = document.createElement('div');
       tagsRow.className = 'history__tags';
@@ -376,7 +507,18 @@ function renderHistoryList() {
       timestamps.appendChild(tagsRow);
     }
 
-    activeItem.append(meta, timestamps, duration);
+    const parts = [meta, timestamps];
+
+    if (todoTitle) {
+      const todoRow = document.createElement('div');
+      todoRow.className = 'history__todo';
+      todoRow.textContent = `工作：${todoTitle}`;
+      parts.push(todoRow);
+    }
+
+    parts.push(duration);
+
+    activeItem.append(...parts);
     items.push(activeItem);
   }
 
@@ -416,6 +558,8 @@ function renderHistoryList() {
     duration.className = 'history__duration';
     duration.textContent = `耗時：${formatDuration(session.durationSeconds ?? 0)}`;
 
+    const todoTitle = getDisplayTodoTitle(session);
+
     if (session.tags?.length) {
       const tagsRow = document.createElement('div');
       tagsRow.className = 'history__tags';
@@ -423,7 +567,18 @@ function renderHistoryList() {
       timestamps.appendChild(tagsRow);
     }
 
-    item.append(meta, timestamps, duration);
+    const parts = [meta, timestamps];
+
+    if (todoTitle) {
+      const todoRow = document.createElement('div');
+      todoRow.className = 'history__todo';
+      todoRow.textContent = `工作：${todoTitle}`;
+      parts.push(todoRow);
+    }
+
+    parts.push(duration);
+
+    item.append(...parts);
     items.push(item);
   });
 
@@ -452,23 +607,57 @@ function renderTimeline() {
   const container = elements.timeline;
   container.innerHTML = '';
 
-  const entries = [];
+  const dayGroups = new Map();
+
+  const ensureGroup = key => {
+    if (!dayGroups.has(key)) {
+      dayGroups.set(key, {
+        sessions: [],
+        todos: []
+      });
+    }
+    return dayGroups.get(key);
+  };
+
+  const addSessionToGroup = session => {
+    const key = getDateKey(session.startedAt || session.endedAt);
+    if (!key) {
+      return;
+    }
+    ensureGroup(key).sessions.push(session);
+  };
 
   if (state.activeSession) {
-    entries.push({
+    addSessionToGroup({
       ...state.activeSession,
       isActive: true
     });
   }
 
   state.history.forEach(session => {
-    entries.push({
+    addSessionToGroup({
       ...session,
       isActive: false
     });
   });
 
-  if (!entries.length) {
+  state.todos.forEach(todo => {
+    if (!todo.completed || !todo.completedAt) {
+      return;
+    }
+    const key = getDateKey(todo.completedAt);
+    if (!key) {
+      return;
+    }
+    ensureGroup(key).todos.push({
+      id: todo.id,
+      title: String(todo.title || '').trim() || '(未命名)',
+      completedAt: todo.completedAt,
+      tags: normalizeTags(todo.tags || [])
+    });
+  });
+
+  if (!dayGroups.size) {
     const empty = document.createElement('p');
     empty.className = 'timeline__empty';
     empty.textContent = '目前沒有紀錄';
@@ -476,30 +665,73 @@ function renderTimeline() {
     return;
   }
 
-  const groups = new Map();
-
-  entries.forEach(entry => {
-    const base = entry.startedAt || entry.endedAt || new Date().toISOString();
-    const date = new Date(base);
-    const key = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(
-      date.getDate()
-    ).padStart(2, '0')}`;
-
-    if (!groups.has(key)) {
-      groups.set(key, []);
-    }
-    groups.get(key).push(entry);
-  });
-
-  const sortedKeys = Array.from(groups.keys()).sort((a, b) => (a < b ? 1 : -1));
+  const sortedKeys = Array.from(dayGroups.keys()).sort((a, b) => (a < b ? 1 : -1));
 
   sortedKeys.forEach(key => {
-    const dayEntries = groups.get(key);
-    dayEntries.sort((a, b) => {
-      const aTime = new Date(a.startedAt || a.endedAt || 0).getTime();
-      const bTime = new Date(b.startedAt || b.endedAt || 0).getTime();
-      return bTime - aTime;
-    });
+    const group = dayGroups.get(key);
+    const times = [];
+
+    const pushTime = value => {
+      if (Number.isFinite(value)) {
+        times.push(value);
+      }
+    };
+
+    const sessions = group.sessions
+      .map(entry => {
+        const startMs = getTimeValue(entry.startedAt) ?? getTimeValue(entry.endedAt);
+        let endMs = entry.isActive ? Date.now() : getTimeValue(entry.endedAt);
+
+        if (!Number.isFinite(endMs) && Number.isFinite(startMs) && Number.isFinite(entry.durationSeconds)) {
+          endMs = startMs + entry.durationSeconds * 1000;
+        }
+
+        if (!Number.isFinite(startMs)) {
+          return null;
+        }
+
+        if (!Number.isFinite(endMs) || endMs < startMs) {
+          endMs = startMs;
+        }
+
+        pushTime(startMs);
+        pushTime(endMs);
+
+        return {
+          ...entry,
+          startMs,
+          endMs
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.startMs - b.startMs);
+
+    const todos = group.todos
+      .map(todo => {
+        const completedMs = getTimeValue(todo.completedAt);
+        if (!Number.isFinite(completedMs)) {
+          return null;
+        }
+        pushTime(completedMs);
+        return {
+          ...todo,
+          completedMs
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.completedMs - b.completedMs);
+
+    if (!times.length) {
+      return;
+    }
+
+    const minMs = Math.min(...times);
+    const maxMsActual = Math.max(...times);
+    const actualSpan = Math.max(maxMsActual - minMs, 1);
+    const spanForHeight = Math.max(actualSpan, TIMELINE_MIN_SPAN_MS);
+    const desiredHeight = (spanForHeight / 60000) * TIMELINE_PX_PER_MINUTE;
+    const dayHeight = Math.max(desiredHeight, TIMELINE_MIN_DAY_HEIGHT);
+    const scale = dayHeight / actualSpan;
 
     const daySection = document.createElement('div');
     daySection.className = 'timeline__day';
@@ -509,37 +741,86 @@ function renderTimeline() {
     dateHeading.textContent = formatDayLabel(key);
     daySection.appendChild(dateHeading);
 
-    const entriesList = document.createElement('div');
-    entriesList.className = 'timeline__entries';
+    const columnHead = document.createElement('div');
+    columnHead.className = 'timeline__columns-head';
+    columnHead.innerHTML = '<span>番茄鐘</span><span>待辦完成</span>';
+    daySection.appendChild(columnHead);
 
-    dayEntries.forEach(entry => {
-      const item = document.createElement('div');
-      item.className = 'timeline__item';
+    const columns = document.createElement('div');
+    columns.className = 'timeline__columns';
+    columns.style.setProperty('--timeline-day-height', `${dayHeight}px`);
 
-      const range = document.createElement('div');
-      range.className = 'timeline__heading';
-      const startLabel = formatTimeOfDay(entry.startedAt);
+    const sessionsColumn = document.createElement('div');
+    sessionsColumn.className = 'timeline__column timeline__column--sessions';
+    sessionsColumn.style.setProperty('--timeline-day-height', `${dayHeight}px`);
+
+    const todosColumn = document.createElement('div');
+    todosColumn.className = 'timeline__column timeline__column--todos';
+    todosColumn.style.setProperty('--timeline-day-height', `${dayHeight}px`);
+
+    const sessionWrappers = [];
+    const todoEntries = [];
+
+    const sessionLayouts = sessions.map(entry => {
+      const startOffset = Math.max((entry.startMs - minMs) * scale, 0);
+      const endOffset = Math.max((entry.endMs - minMs) * scale, startOffset);
+      const baseHeight = Math.max(endOffset - startOffset, TIMELINE_MIN_SESSION_HEIGHT);
+      return { entry, startOffset, baseHeight };
+    });
+
+    sessionLayouts.forEach(layout => {
+      const { entry, startOffset, baseHeight } = layout;
+
+      const wrapper = document.createElement('div');
+      wrapper.className = 'timeline__session';
+      if (entry.isActive) {
+        wrapper.classList.add('timeline__session--active');
+      }
+      wrapper.style.top = `${startOffset}px`;
+      wrapper.style.minHeight = `${baseHeight}px`;
+      wrapper.dataset.initialTop = String(startOffset);
+      wrapper.dataset.baseHeight = String(baseHeight);
+
+      const bar = document.createElement('span');
+      bar.className = 'timeline__session-bar';
+      wrapper.appendChild(bar);
+
+      const card = document.createElement('div');
+      card.className = 'timeline__session-card';
+
+      const heading = document.createElement('div');
+      heading.className = 'timeline__heading';
+      const rangeText = document.createElement('span');
+      rangeText.className = 'timeline__range';
+      const startLabel = formatTimeOfDay(entry.startedAt ?? entry.endedAt);
       const endLabel = entry.isActive
         ? '進行中'
         : entry.endedAt
           ? formatTimeOfDay(entry.endedAt)
-          : '—';
-      const rangeText = document.createElement('span');
-      rangeText.className = 'timeline__range';
+          : formatTimeOfDay(entry.startedAt);
       rangeText.textContent = `${startLabel} - ${endLabel}`;
 
       const categoryChip = document.createElement('span');
       categoryChip.className = 'timeline__category';
       categoryChip.textContent = entry.category || defaultCategories[0];
 
-      range.append(rangeText, categoryChip);
+      heading.append(rangeText, categoryChip);
+      card.appendChild(heading);
 
       const details = document.createElement('div');
       details.className = 'timeline__details';
 
+      const todoTitle = getDisplayTodoTitle(entry);
+      if (todoTitle) {
+        const todoRow = document.createElement('span');
+        todoRow.className = 'timeline__todo';
+        todoRow.textContent = `工作：${todoTitle}`;
+        details.appendChild(todoRow);
+      }
+
       if (entry.plannedMinutes) {
         const planned = document.createElement('span');
-        planned.textContent = `預計：${entry.plannedMinutes} 分`; 
+        planned.textContent = `預計：${entry.plannedMinutes} 分`;
         details.appendChild(planned);
       }
 
@@ -581,12 +862,132 @@ function renderTimeline() {
         details.appendChild(tagsRow);
       }
 
-      item.append(range, details);
-      entriesList.append(item);
+      card.appendChild(details);
+      wrapper.appendChild(card);
+      sessionsColumn.appendChild(wrapper);
+      sessionWrappers.push({ wrapper, card, layout });
     });
 
-    daySection.appendChild(entriesList);
+    if (!sessions.length) {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'timeline__placeholder';
+      placeholder.textContent = '沒有時間紀錄';
+      sessionsColumn.appendChild(placeholder);
+    }
+
+    const todoLayouts = todos.map(todo => ({
+      todo,
+      top: Math.max((todo.completedMs - minMs) * scale, 0)
+    }));
+
+    todoLayouts.forEach(layout => {
+      const { todo, top } = layout;
+
+      const item = document.createElement('div');
+      item.className = 'timeline__todo-entry';
+      item.style.top = `${top}px`;
+      item.dataset.initialTop = String(top);
+
+      const dot = document.createElement('span');
+      dot.className = 'timeline__todo-dot';
+      item.appendChild(dot);
+
+      const card = document.createElement('div');
+      card.className = 'timeline__todo-card';
+
+      const timeLabel = document.createElement('span');
+      timeLabel.className = 'timeline__todo-time';
+      timeLabel.textContent = `完成：${formatTimeOfDay(todo.completedAt)}`;
+      card.appendChild(timeLabel);
+
+      const title = document.createElement('p');
+      title.className = 'timeline__todo-title';
+      title.textContent = todo.title;
+      card.appendChild(title);
+
+      if (todo.tags?.length) {
+        const tags = document.createElement('span');
+        tags.className = 'timeline__todo-tags';
+        tags.textContent = `標籤：${normalizeTags(todo.tags).join(', ')}`;
+        card.appendChild(tags);
+      }
+
+      item.appendChild(card);
+      todosColumn.appendChild(item);
+      todoEntries.push({ item, layout });
+    });
+
+    if (!todos.length) {
+      const placeholder = document.createElement('div');
+      placeholder.className = 'timeline__placeholder';
+      placeholder.textContent = '沒有待辦完成';
+      todosColumn.appendChild(placeholder);
+    }
+
+    columns.append(sessionsColumn, todosColumn);
+    daySection.appendChild(columns);
     container.appendChild(daySection);
+
+    requestAnimationFrame(() => {
+      let requiredHeight = dayHeight;
+
+      const sessionMeta = sessionWrappers
+        .map(({ wrapper, card, layout }) => ({
+          wrapper,
+          card,
+          initialTop: layout.startOffset,
+          baseHeight: layout.baseHeight
+        }))
+        .sort((a, b) => a.initialTop - b.initialTop);
+
+      let lastSessionBottom = -Infinity;
+      sessionMeta.forEach(meta => {
+        const { wrapper, card, initialTop, baseHeight } = meta;
+        let top = initialTop;
+        const measuredHeight = wrapper.offsetHeight;
+        const cardHeight = card ? card.offsetHeight + 8 : 0;
+        let height = Math.max(measuredHeight, cardHeight, baseHeight, TIMELINE_MIN_SESSION_HEIGHT);
+
+        if (top < lastSessionBottom + TIMELINE_SESSION_GAP) {
+          top = lastSessionBottom + TIMELINE_SESSION_GAP;
+        }
+
+        wrapper.style.top = `${top}px`;
+        wrapper.style.minHeight = `${height}px`;
+        wrapper.style.height = `${height}px`;
+
+        lastSessionBottom = top + height;
+        requiredHeight = Math.max(requiredHeight, lastSessionBottom);
+      });
+
+      const todoMeta = todoEntries
+        .map(({ item, layout }) => ({
+          item,
+          initialTop: layout.top
+        }))
+        .sort((a, b) => a.initialTop - b.initialTop);
+
+      let lastTodoBottom = -Infinity;
+      todoMeta.forEach(meta => {
+        const { item, initialTop } = meta;
+        let top = initialTop;
+        const actualHeight = item.offsetHeight || 0;
+
+        if (top < lastTodoBottom + TIMELINE_TODO_GAP) {
+          top = lastTodoBottom + TIMELINE_TODO_GAP;
+        }
+
+        item.style.top = `${top}px`;
+
+        lastTodoBottom = top + actualHeight;
+        requiredHeight = Math.max(requiredHeight, lastTodoBottom);
+      });
+
+      const finalHeight = Math.ceil(requiredHeight + 44);
+      columns.style.height = `${finalHeight}px`;
+      sessionsColumn.style.height = `${finalHeight}px`;
+      todosColumn.style.height = `${finalHeight}px`;
+    });
   });
 }
 
@@ -640,6 +1041,13 @@ function createTodoItem(todo) {
 
   const actions = document.createElement('div');
   actions.className = 'todo-item__actions';
+
+  const discussionBtn = document.createElement('button');
+  discussionBtn.type = 'button';
+  discussionBtn.dataset.action = 'discussion';
+  const discussionCount = Array.isArray(todo.discussion) ? todo.discussion.length : 0;
+  discussionBtn.textContent = discussionCount ? `問題紀錄 (${discussionCount})` : '問題紀錄';
+  actions.appendChild(discussionBtn);
 
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
@@ -714,6 +1122,9 @@ function renderTodos() {
   list.appendChild(fragment);
   renderTagSuggestions();
   updateActiveTodoUI();
+  if (state.activeDiscussionTodoId) {
+    renderTodoDiscussion();
+  }
 }
 
 function renderTagSuggestions() {
@@ -789,7 +1200,8 @@ function addTodo(title) {
     completed: false,
     createdAt: new Date().toISOString(),
     completedAt: null,
-    tags
+    tags,
+    discussion: []
   };
 
   state.todos.unshift(todo);
@@ -823,6 +1235,9 @@ function removeTodo(id) {
   }
 
   state.todos.splice(index, 1);
+  if (state.activeDiscussionTodoId === id) {
+    closeTodoDiscussion();
+  }
   persistState();
   renderTodos();
   if (state.activeTodoId === id) {
@@ -832,6 +1247,9 @@ function removeTodo(id) {
 
 function clearCompletedTodos() {
   state.todos = state.todos.filter(todo => !todo.completed);
+  if (state.activeDiscussionTodoId && !state.todos.some(todo => todo.id === state.activeDiscussionTodoId)) {
+    closeTodoDiscussion();
+  }
   persistState();
   renderTodos();
   if (state.activeTodoId && !state.todos.some(todo => todo.id === state.activeTodoId)) {
@@ -894,6 +1312,184 @@ function updateActiveTodoUI() {
     elements.todoList.querySelectorAll('.todo-item').forEach(item => {
       item.classList.toggle('todo-item--active', item.dataset.id === state.activeTodoId);
     });
+  }
+}
+
+function getActiveDiscussionTodo() {
+  if (!state.activeDiscussionTodoId) {
+    return null;
+  }
+  return state.todos.find(todo => todo.id === state.activeDiscussionTodoId) || null;
+}
+
+function openTodoDiscussion(id) {
+  if (!elements.todoDiscussionOverlay) {
+    return;
+  }
+
+  if (!state.todos.some(todo => todo.id === id)) {
+    return;
+  }
+
+  state.activeDiscussionTodoId = id;
+  renderTodoDiscussion({ focusInput: true, scrollToEnd: true });
+  if (elements.todoDiscussionInput) {
+    elements.todoDiscussionInput.value = '';
+  }
+  persistState();
+}
+
+function closeTodoDiscussion() {
+  state.activeDiscussionTodoId = null;
+  if (elements.todoDiscussionOverlay) {
+    elements.todoDiscussionOverlay.hidden = true;
+  }
+  document.body.classList.remove('task-dialog-open');
+  if (elements.todoDiscussionInput) {
+    elements.todoDiscussionInput.value = '';
+  }
+  persistState();
+}
+
+function renderTodoDiscussion({ focusInput = false, scrollToEnd = false } = {}) {
+  const overlay = elements.todoDiscussionOverlay;
+  const titleEl = elements.todoDiscussionTitle;
+  const list = elements.todoDiscussionList;
+  const empty = elements.todoDiscussionEmpty;
+  if (!overlay || !titleEl || !list || !empty) {
+    return;
+  }
+
+  const todo = getActiveDiscussionTodo();
+
+  if (!todo) {
+    overlay.hidden = true;
+    document.body.classList.remove('task-dialog-open');
+    if (state.activeDiscussionTodoId) {
+      state.activeDiscussionTodoId = null;
+      persistState();
+    }
+    return;
+  }
+
+  const normalized = normalizeDiscussion(todo.discussion || []);
+  todo.discussion = normalized;
+
+  overlay.hidden = false;
+  document.body.classList.add('task-dialog-open');
+
+  titleEl.textContent = todo.title || '(未命名)';
+  list.innerHTML = '';
+
+  if (!normalized.length) {
+    empty.hidden = false;
+  } else {
+    empty.hidden = true;
+    normalized.forEach(entry => {
+      const item = document.createElement('li');
+      item.className = 'task-discussion__item';
+      item.dataset.id = entry.id;
+
+      const meta = document.createElement('div');
+      meta.className = 'task-discussion__meta';
+
+      const time = document.createElement('span');
+      time.textContent = formatDateTime(entry.createdAt);
+      meta.appendChild(time);
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'task-discussion__remove';
+      remove.dataset.action = 'delete-discussion';
+      remove.dataset.id = entry.id;
+      remove.textContent = '刪除';
+      meta.appendChild(remove);
+
+      const text = document.createElement('p');
+      text.className = 'task-discussion__text';
+      text.textContent = entry.text;
+
+      item.append(meta, text);
+      list.appendChild(item);
+    });
+  }
+
+  if (focusInput && elements.todoDiscussionInput) {
+    elements.todoDiscussionInput.focus();
+  }
+
+  if (scrollToEnd && list.lastElementChild) {
+    list.lastElementChild.scrollIntoView({ block: 'end' });
+  }
+}
+
+function handleTodoDiscussionSubmit(event) {
+  event.preventDefault();
+
+  const todo = getActiveDiscussionTodo();
+  if (!todo || !elements.todoDiscussionInput) {
+    return;
+  }
+
+  const value = elements.todoDiscussionInput.value.trim();
+  if (!value) {
+    elements.todoDiscussionInput.focus();
+    return;
+  }
+
+  const newEntry = {
+    id: crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+    text: value,
+    createdAt: new Date().toISOString()
+  };
+
+  todo.discussion = normalizeDiscussion([...(todo.discussion || []), newEntry]);
+  elements.todoDiscussionInput.value = '';
+  renderTodoDiscussion({ focusInput: true, scrollToEnd: true });
+  renderTodos();
+  persistState();
+}
+
+function handleTodoDiscussionListClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  if (target.dataset.action !== 'delete-discussion') {
+    return;
+  }
+
+  const todo = getActiveDiscussionTodo();
+  if (!todo) {
+    return;
+  }
+
+  const { id } = target.dataset;
+  if (!id) {
+    return;
+  }
+
+  todo.discussion = normalizeDiscussion((todo.discussion || []).filter(entry => entry.id !== id));
+  renderTodoDiscussion();
+  renderTodos();
+  persistState();
+}
+
+function handleTodoDiscussionOverlayClick(event) {
+  const target = event.target;
+  if (!(target instanceof HTMLElement)) {
+    return;
+  }
+
+  if (target === elements.todoDiscussionOverlay || target.dataset.dialogClose !== undefined) {
+    closeTodoDiscussion();
+  }
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === 'Escape' && !elements.todoDiscussionOverlay?.hidden) {
+    closeTodoDiscussion();
   }
 }
 
@@ -1270,6 +1866,8 @@ function handleTodoListClick(event) {
     removeTodo(id);
   } else if (action === 'activate') {
     setActiveTodo(id);
+  } else if (action === 'discussion') {
+    openTodoDiscussion(id);
   }
 }
 
@@ -1429,7 +2027,20 @@ function bindEvents() {
   if (elements.clearActiveTodoBtn) {
     elements.clearActiveTodoBtn.addEventListener('click', () => setActiveTodo(null));
   }
+  if (elements.todoDiscussionForm) {
+    elements.todoDiscussionForm.addEventListener('submit', handleTodoDiscussionSubmit);
+  }
+  if (elements.todoDiscussionList) {
+    elements.todoDiscussionList.addEventListener('click', handleTodoDiscussionListClick);
+  }
+  if (elements.todoDiscussionClose) {
+    elements.todoDiscussionClose.addEventListener('click', closeTodoDiscussion);
+  }
+  if (elements.todoDiscussionOverlay) {
+    elements.todoDiscussionOverlay.addEventListener('click', handleTodoDiscussionOverlayClick);
+  }
   elements.homeTabs.forEach(tab => tab.addEventListener('click', handleTabClick));
+  document.addEventListener('keydown', handleGlobalKeydown);
 }
 
 function init() {
