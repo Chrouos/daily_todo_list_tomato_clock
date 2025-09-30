@@ -32,6 +32,7 @@ const elements = {
   todoTagSuggestions: document.getElementById('todoTagSuggestions'),
   todoList: document.getElementById('todoList'),
   clearTodosBtn: document.getElementById('clearTodosBtn'),
+  completeActiveTodoBtn: document.getElementById('completeActiveTodoBtn'),
   clearActiveTodoBtn: document.getElementById('clearActiveTodoBtn'),
   todoDiscussionOverlay: document.getElementById('todoDiscussionOverlay'),
   todoDiscussionTitle: document.getElementById('todoDiscussionTitle'),
@@ -342,7 +343,7 @@ function loadPersistedState() {
         } else if (stored.activeTab === 'timeline') {
           state.activeTab = 'timeline';
         } else if (stored.activeTab === 'todo') {
-          state.activeTab = 'todo';
+          state.activeTab = 'home';
         } else {
           state.activeTab = 'home';
         }
@@ -999,11 +1000,18 @@ function createTodoItem(todo) {
     item.classList.add('todo-item--completed');
   }
 
+  const header = document.createElement('div');
+  header.className = 'todo-item__header';
+
+  const checkboxWrapper = document.createElement('label');
+  checkboxWrapper.className = 'todo-item__checkbox';
+
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
   checkbox.checked = Boolean(todo.completed);
   checkbox.dataset.action = 'toggle';
-  item.appendChild(checkbox);
+  checkboxWrapper.appendChild(checkbox);
+  header.appendChild(checkboxWrapper);
 
   const content = document.createElement('div');
   content.className = 'todo-item__content';
@@ -1013,31 +1021,40 @@ function createTodoItem(todo) {
   title.textContent = todo.title || '(未命名)';
   content.appendChild(title);
 
-  const meta = document.createElement('span');
-  meta.className = 'todo-item__meta';
-  meta.textContent = `新增：${formatDateTime(todo.createdAt)}`;
-  content.appendChild(meta);
+  const details = document.createElement('div');
+  details.className = 'todo-item__details';
+
+  const createdMeta = document.createElement('span');
+  createdMeta.className = 'todo-item__meta';
+  createdMeta.textContent = `新增：${formatDateTime(todo.createdAt)}`;
+  details.appendChild(createdMeta);
 
   if (todo.completed && todo.completedAt) {
     const completedMeta = document.createElement('span');
     completedMeta.className = 'todo-item__meta';
     completedMeta.textContent = `完成：${formatDateTime(todo.completedAt)}`;
-    content.appendChild(completedMeta);
+    details.appendChild(completedMeta);
   }
 
-  if (todo.tags?.length) {
+  const tags = normalizeTags(todo.tags);
+  if (tags.length) {
     const tagsContainer = document.createElement('div');
     tagsContainer.className = 'todo-item__tags';
-    normalizeTags(todo.tags).forEach(tag => {
+    tags.forEach(tag => {
       const chip = document.createElement('span');
       chip.className = 'todo-item__tag';
       chip.textContent = tag;
       tagsContainer.appendChild(chip);
     });
-    content.appendChild(tagsContainer);
+    details.appendChild(tagsContainer);
   }
 
-  item.appendChild(content);
+  if (details.children.length) {
+    content.appendChild(details);
+  }
+
+  header.appendChild(content);
+  item.appendChild(header);
 
   const actions = document.createElement('div');
   actions.className = 'todo-item__actions';
@@ -1228,6 +1245,19 @@ function toggleTodo(id) {
   }
 }
 
+function completeActiveTodo() {
+  if (!state.activeTodoId) {
+    return;
+  }
+
+  const todo = state.todos.find(item => item.id === state.activeTodoId);
+  if (!todo || todo.completed) {
+    return;
+  }
+
+  toggleTodo(todo.id);
+}
+
 function removeTodo(id) {
   const index = state.todos.findIndex(item => item.id === id);
   if (index === -1) {
@@ -1300,8 +1330,16 @@ function updateActiveTodoUI() {
       : '';
   }
 
+  if (elements.completeActiveTodoBtn) {
+    const canComplete = Boolean(activeTodo && !activeTodo.completed);
+    elements.completeActiveTodoBtn.hidden = !canComplete;
+    elements.completeActiveTodoBtn.disabled = !canComplete;
+  }
+
   if (elements.clearActiveTodoBtn) {
-    elements.clearActiveTodoBtn.hidden = !activeTodo;
+    const shouldShow = Boolean(activeTodo);
+    elements.clearActiveTodoBtn.hidden = !shouldShow;
+    elements.clearActiveTodoBtn.disabled = !shouldShow;
   }
 
   if (elements.categorySelect && activeTodo) {
@@ -1898,7 +1936,7 @@ function handleTabClick(event) {
 
 function setActiveTab(tab) {
   let targetTab = 'home';
-  if (tab === 'settings' || tab === 'logs' || tab === 'timeline' || tab === 'todo') {
+  if (tab === 'settings' || tab === 'logs' || tab === 'timeline') {
     targetTab = tab;
   }
   state.activeTab = targetTab;
@@ -1915,9 +1953,7 @@ function setActiveTab(tab) {
     panel.hidden = !isActive;
   });
 
-  if (targetTab === 'todo') {
-    renderTagSuggestions();
-  }
+  renderTagSuggestions();
 }
 
 function applySettings(event) {
@@ -2023,6 +2059,9 @@ function bindEvents() {
   }
   if (elements.todoTagsInput) {
     elements.todoTagsInput.addEventListener('input', renderTagSuggestions);
+  }
+  if (elements.completeActiveTodoBtn) {
+    elements.completeActiveTodoBtn.addEventListener('click', completeActiveTodo);
   }
   if (elements.clearActiveTodoBtn) {
     elements.clearActiveTodoBtn.addEventListener('click', () => setActiveTodo(null));

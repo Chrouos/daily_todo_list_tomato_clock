@@ -26,46 +26,79 @@
         <button class="app-tabs__tab" data-tab="timeline" role="tab" aria-selected="false">
           Timeline
         </button>
-        <button class="app-tabs__tab" data-tab="todo" role="tab" aria-selected="false">
-          Todo
-        </button>
       </nav>
 
       <section class="app-panels">
         <section class="app-panel app-panel--active" data-panel="home" role="tabpanel">
-          <section class="timer">
-            <div class="timer__display" id="timeDisplay">25:00</div>
-            <div class="timer__progress">
-              <div class="timer__progress-bar" id="progressBar"></div>
-            </div>
-          </section>
+          <div class="home-layout">
+            <div class="home-layout__main">
+              <section class="timer">
+                <div class="timer__display" id="timeDisplay">25:00</div>
+                <div class="timer__progress">
+                  <div class="timer__progress-bar" id="progressBar"></div>
+                </div>
+              </section>
 
-          <section class="status">
-            <span class="status__phase" id="phaseChip">專注</span>
-            <label class="category-selector" for="categorySelect">
-              <span class="category-selector__label">分類</span>
-              <select id="categorySelect" class="category-selector__select"></select>
-            </label>
-          </section>
+              <section class="status">
+                <span class="status__phase" id="phaseChip">專注</span>
+                <label class="category-selector" for="categorySelect">
+                  <span class="category-selector__label">分類</span>
+                  <select id="categorySelect" class="category-selector__select"></select>
+                </label>
+              </section>
 
-          <section class="current-todo" id="currentTodo">
-            <div class="current-todo__info">
-              <span class="current-todo__label">目前待辦</span>
-              <p class="current-todo__title" id="currentTodoTitle">未選擇</p>
-              <p class="current-todo__tags" id="currentTodoTags"></p>
-            </div>
-            <div class="current-todo__actions">
-              <button type="button" id="clearActiveTodoBtn" class="btn btn--ghost" hidden>取消選擇</button>
-            </div>
-          </section>
+              <section class="current-todo" id="currentTodo">
+                <div class="current-todo__info">
+                  <span class="current-todo__label">目前待辦</span>
+                  <p class="current-todo__title" id="currentTodoTitle">未選擇</p>
+                  <p class="current-todo__tags" id="currentTodoTags"></p>
+                </div>
+                <div class="current-todo__actions">
+                  <button type="button" id="completeActiveTodoBtn" class="btn btn--primary" hidden>完成</button>
+                  <button type="button" id="clearActiveTodoBtn" class="btn btn--ghost" hidden>取消選擇</button>
+                </div>
+              </section>
 
-          <section class="controls">
-            <button id="startBtn" class="btn btn--primary">Start</button>
-            <button id="pauseBtn" class="btn">Pause</button>
-            <button id="resetBtn" class="btn">Reset</button>
-            <button id="addTimeBtn" class="btn">+1 min</button>
-            <button id="subtractTimeBtn" class="btn">-1 min</button>
-          </section>
+              <section class="controls">
+                <button id="startBtn" class="btn btn--primary">Start</button>
+                <button id="pauseBtn" class="btn">Pause</button>
+                <button id="resetBtn" class="btn">Reset</button>
+                <button id="addTimeBtn" class="btn">+1 min</button>
+                <button id="subtractTimeBtn" class="btn">-1 min</button>
+              </section>
+            </div>
+
+            <aside class="home-layout__sidebar" aria-label="Todo list">
+              <div class="panel-card panel-card--todo">
+                <div class="panel-card__header">
+                  <h2>Todo List</h2>
+                  <button type="button" id="clearTodosBtn" class="btn btn--ghost">清除完成項目</button>
+                </div>
+                <form id="todoForm" class="todo-form" autocomplete="off">
+                  <input
+                    type="text"
+                    id="todoInput"
+                    placeholder="新增待辦事項"
+                    maxlength="80"
+                  />
+                  <div class="todo-tags">
+                    <label for="todoTagsInput">標籤（逗號分隔，可點選建議新增）</label>
+                    <input
+                      type="text"
+                      id="todoTagsInput"
+                      placeholder="例如：寫作, 研究"
+                      maxlength="120"
+                    />
+                    <div class="todo-tags__suggestions" id="todoTagSuggestions"></div>
+                  </div>
+                  <div class="todo-form__actions">
+                    <button type="submit" class="btn btn--primary">新增</button>
+                  </div>
+                </form>
+                <ul class="todo-list" id="todoList"></ul>
+              </div>
+            </aside>
+          </div>
         </section>
 
         <section class="app-panel" data-panel="settings" role="tabpanel" hidden>
@@ -136,36 +169,6 @@
           </div>
         </section>
 
-        <section class="app-panel" data-panel="todo" role="tabpanel" hidden>
-          <div class="panel-card">
-            <div class="panel-card__header">
-              <h2>Todo List</h2>
-              <button type="button" id="clearTodosBtn" class="btn btn--ghost">清除完成項目</button>
-            </div>
-            <form id="todoForm" class="todo-form" autocomplete="off">
-              <input
-                type="text"
-                id="todoInput"
-                placeholder="新增待辦事項"
-                maxlength="80"
-              />
-              <div class="todo-tags">
-                <label for="todoTagsInput">標籤（逗號分隔，可點選建議新增）</label>
-                <input
-                  type="text"
-                  id="todoTagsInput"
-                  placeholder="例如：寫作, 研究"
-                  maxlength="120"
-                />
-                <div class="todo-tags__suggestions" id="todoTagSuggestions"></div>
-              </div>
-              <div class="todo-form__actions">
-                <button type="submit" class="btn btn--primary">新增</button>
-              </div>
-            </form>
-            <ul class="todo-list" id="todoList"></ul>
-          </div>
-        </section>
       </section>
     </main>
 
